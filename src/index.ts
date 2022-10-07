@@ -25,12 +25,12 @@ export const defaultOptions: RollupCssOptions = {
   exclude: null,
   output: {
     cssForChunks: 'extract',
-    cssAsAssets: true,
+    cssAsAssets: false,
     sourcemap: true,
     minify: false,
   },
   assets: {
-    preserveDir: true,
+    preserveDir: false,
     publicPath: null,
     inline: false,
     file: true,
@@ -38,7 +38,10 @@ export const defaultOptions: RollupCssOptions = {
   },
   transform: {
     cssProcessors: preprocessors,
-    result: { code: 'export default undefined', map: { mappings: '' } },
+    result: {
+      code: `export default undefined`,
+      map: { mappings: '' },
+    }, // if css modules ? 'export default JSON' : ''
   },
   resolve: null,
 };
@@ -150,7 +153,6 @@ export const RollupCss = ({
       };
     },
     async renderChunk(code: string, chunk: RenderedChunk) {
-      // console.log(chunk.name);
       return null;
     },
     async generateBundle(_, bundle) {

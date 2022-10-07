@@ -18,8 +18,8 @@ const renderCssFile = async (source: string, substitutions: Record<string, strin
         argName: Object.keys(substitutions),
       })(substitutions);
       resolve(result);
-    } catch {
-      reject();
+    } catch (error) {
+      reject(error);
     }
   });
 
@@ -106,8 +106,10 @@ export const renderCssFiles = (
             typeof source === 'string' ? source : source.toString(),
             computedSubstitutions
           )
-            .catch(() => {
-              throw new Error(`Couldn't find all asset files used by the file "${cssFileName}".`);
+            .catch((error: Error) => {
+              throw new Error(
+                `Couldn't find all asset files used by the file "${cssFileName}". (${error})`
+              );
             })
             .then((substitutedSource) => {
               bundleAsset.source = substitutedSource;

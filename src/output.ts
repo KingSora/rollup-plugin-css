@@ -208,7 +208,6 @@ export const emitChunkCssFiles = (
           dynamicOrigin: getCssDynamicOrigin(moduleMetas, dynamicModuleMetas, meta),
         }));
       };
-      console.log(getCssDependencies());
       const getExtractInfo = (): Required<CssForChunksExtractResult> => {
         const result =
           typeof extract === 'function'
