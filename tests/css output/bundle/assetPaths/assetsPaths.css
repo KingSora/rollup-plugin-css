@@ -1,0 +1,5 @@
+@import '../atImported/atImported.css';
+
+.assetPaths {
+  background: pink url('../atImported/atImported.svg');
+}

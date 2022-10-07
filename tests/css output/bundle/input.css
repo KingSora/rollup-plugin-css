@@ -1,0 +1,21 @@
+@import './atImported/atImported.css';
+
+.selector {
+  opacity: 1;
+}
+
+.dataurl {
+  background: url('data:text/html,lots of text…<p><a name%3D"bottom">bottom</a>?arg=val</p>');
+}
+
+.id {
+  background: url('#element');
+}
+
+.url {
+  background: url('https://rollupjs.org');
+}
+
+.absolute {
+  background: url('/absolute.svg');
+}

@@ -1,0 +1,4 @@
+.dynamic {
+  z-index: 0;
+  background: url('./dynamic.svg');
+}
