@@ -42,6 +42,8 @@ const commonDir = (files: string[]) => {
   return commonSegments.length > 1 ? commonSegments.join('/') : '/';
 };
 
+const replaceExtension = (path: string, replacement = '') => path.replace(/\.[^.]*$/, replacement);
+
 const getPreserveDir = (
   preserveDir: RollupCssAssets['preserveDir'],
   emitName: string,
@@ -99,11 +101,15 @@ const getAssetName = (
   { preserveDir, file }: RollupCssAssets
 ) => {
   const fullName = normalizePathSlashes(path.relative(outputBasePath || '', id));
-  const suggestedName = getPreserveDir(preserveDir, fullName, id, isCss)
+  const defaultNameOriginalExtension = getPreserveDir(preserveDir, fullName, id, isCss)
     ? fullName
     : path.basename(fullName);
 
-  return typeof file === 'function' ? file(id, suggestedName, isCss) : suggestedName;
+  const defaultName = isCss
+    ? replaceExtension(defaultNameOriginalExtension, '.css')
+    : defaultNameOriginalExtension;
+
+  return typeof file === 'function' ? file(id, defaultName, isCss) : defaultName;
 };
 
 const getSubstitutions = (inputs: CssInputItem[]) =>

@@ -6,6 +6,7 @@ module.exports = async (input, options) => {
     input,
     output: {
       dir: 'out',
+      assetFileNames: 'assets/[name][extname]',
     },
     plugins: [RollupCss(options)],
   };

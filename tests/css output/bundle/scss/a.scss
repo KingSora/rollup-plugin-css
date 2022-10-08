@@ -1,0 +1,9 @@
+@use 'folder/b.scss' as *;
+
+.a {
+  content: 'a';
+}
+
+.ab {
+  content: $b;
+}

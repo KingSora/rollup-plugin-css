@@ -1,5 +1,10 @@
 import type { BuildOptions } from 'esbuild';
-import type { SourceMapInput, TransformResult as RollupTransformResult, OutputChunk } from 'rollup';
+import type {
+  SourceMapInput,
+  TransformResult as RollupTransformResult,
+  OutputChunk,
+  PluginContext,
+} from 'rollup';
 import type { FilterPattern } from '@rollup/pluginutils';
 
 type RollupTransformResultObj = Exclude<RollupTransformResult, string | null | void>;
@@ -187,13 +192,20 @@ export type RollupCssTransform = {
   result: Transform;
 };
 
+export interface CssProcessorInfo {
+  code: string;
+  path: string;
+  sourcemap: boolean;
+  resolve: (path: string) => Promise<string | null>;
+}
+
 export type CssProcessors =
-  | ((code: string, id: string) => CssProcessorResult | Promise<CssProcessorResult>)
-  | Map<RegExp, (code: string) => CssProcessorResult | Promise<CssProcessorResult>>;
+  | ((info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>)
+  | Map<RegExp, (info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>>;
 
 export type CssProcessorResult = {
   css: string;
-  map?: SourceMapInput;
+  map?: SourceMapInput | undefined;
 };
 
 export type TransformResult = {
@@ -233,8 +245,9 @@ export type RollupCssResolve =
  * The context of a resolution.
  * - "url": if the path to resolve is used in an "url()" token
  * - "@import": if the path to resolve is used in an "@import" rule
+ * - "@use": if the path to resolve is used in an "@use" rule (only possible in sass)
  */
-export type ResolveContext = 'url' | '@import';
+export type ResolveContext = 'url' | '@import' | '@use' | false;
 
 /**
  * Describes the result of a resolution.

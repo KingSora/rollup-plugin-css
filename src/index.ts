@@ -25,7 +25,7 @@ export const defaultOptions: RollupCssOptions = {
   exclude: null,
   output: {
     cssForChunks: 'extract',
-    cssAsAssets: false,
+    cssAsAssets: true,
     sourcemap: true,
     minify: false,
   },
@@ -88,9 +88,21 @@ export const RollupCss = ({
   const filter = createFilter(include, exclude);
   const assetOptions = { preserveDir, publicPath, inline, file, url };
   const [extract, inject] = getCssForChunksOptions(cssForChunks);
+  const importMap = new Map<string, string>();
 
   const plugin: Plugin = {
     name: pluginName,
+
+    async resolveId(source, importer, options) {
+      const id = importMap.get(source);
+
+      if (id) {
+        return {
+          id: source.replace('\0', ''),
+          external: true,
+        };
+      }
+    },
 
     async transform(code, id) {
       if (!filter(id)) {
@@ -98,11 +110,14 @@ export const RollupCss = ({
       }
       const normalizedId = normalizePathSlashes(id);
 
-      // 1. preprocessors
+      // 1. cssProcessors
       const { css: cssProcessorCss, map: cssProcessorMap } = await runCssProcessors(
         preprocessors,
         code,
-        normalizedId
+        sourcemap,
+        normalizedId,
+        resolve,
+        this
       );
 
       // 2. postcss
@@ -137,8 +152,12 @@ export const RollupCss = ({
         ? await transformResult({ css, map })
         : transformResult;
 
+      //const token = `\0^<<^=${Buffer.from(id).toString('base64url')}^>>^`;
+      //importMap.set(token, id);
+
       return {
-        code: transformedCode,
+        // code: `export { default } from ${JSON.stringify(token)}`,
+        code: `export default {}`,
         map: transformedMap,
         meta: {
           [pluginName]: {
