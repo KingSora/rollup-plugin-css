@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import * as url from 'url';
 import type { ExistingRawSourceMap, ResolvedId, TransformPluginContext } from 'rollup';
 import type { Syntax } from 'sass';
@@ -8,7 +9,9 @@ import type {
   CssProcessorResult,
   RollupCssResolve,
   ResolveResult,
+  ResolveContext,
 } from './types';
+import { normalizePathSlashes } from './normalizePathSlashes';
 
 const sassSyntaxMap: Record<Syntax, RegExp> = {
   scss: /\.scss$/,
@@ -16,14 +19,14 @@ const sassSyntaxMap: Record<Syntax, RegExp> = {
   css: /\.css$/,
 };
 
-const getSassSyntax = (path: string): Syntax => {
+const getSassSyntax = (filePath: string): Syntax => {
   const result = Object.entries(sassSyntaxMap).find(
-    ([syntax, regex]) => regex.test(path) && syntax
+    ([syntax, regex]) => regex.test(filePath) && syntax
   );
   if (result) {
     return result[0] as Syntax;
   }
-  throw new Error(`Couldn't determine syntax of "${path}".`);
+  throw new Error(`Couldn't determine syntax of "${filePath}".`);
 };
 
 const getDefaultResolveResult = (result: ResolvedId | null): ResolveResult => {
@@ -37,37 +40,92 @@ const getDefaultResolveResult = (result: ResolvedId | null): ResolveResult => {
   return result;
 };
 
-export const preprocessors: CssProcessors = new Map<
+const travelPath = (pathToTravel: string, backwards?: boolean) => {
+  const normalizedPath = normalizePathSlashes(pathToTravel);
+  const pathSegments = normalizedPath.split('/');
+  const finalPathSegments = backwards ? pathSegments.reverse() : pathSegments;
+  const result = finalPathSegments
+    .map((_, index) => {
+      const segments = finalPathSegments.filter((_, i) => i <= index);
+      return segments.length && path.join(...(backwards ? segments.reverse() : segments));
+    })
+    .filter(Boolean) as string[];
+  return backwards ? result : result.reverse();
+};
+
+const resolvePaths = async (
+  resolve: CssProcessorInfo['resolve'],
+  importedPath: string,
+  importerDir?: string
+) => {
+  let resolvedPath: string | null = null;
+  const importedPathExists = fs.existsSync(importedPath);
+  const pathsToResolve = [
+    importedPath,
+    ...(importedPathExists ? [] : travelPath(importedPath, true)),
+  ];
+  const importer = importedPathExists
+    ? importedPath
+    : travelPath(importedPath).find((p) => fs.existsSync(p));
+  const finalImporter =
+    importerDir || (importedPathExists || !importer ? importer : path.join(importer, '<unknown>'));
+
+  for (let i = 0; i < pathsToResolve.length; i++) {
+    const resolved = await resolve(pathsToResolve[i], finalImporter, '@import');
+
+    if (resolved) {
+      resolvedPath = resolved;
+      break;
+    }
+  }
+  return resolvedPath;
+};
+
+export const cssProcessors: CssProcessors = new Map<
   RegExp,
   (info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>
 >([
   [
     /\.(s[ac]ss)$/,
     async (info) => {
-      const { code, sourcemap, path, resolve } = info;
-      const { default: sassCompiler } = (await import('sass')) || {};
+      const { code, sourcemap, path: filePath, resolve } = info;
+      const { default: sassCompiler } = (await import('sass').catch(() => null)) || {};
 
       if (sassCompiler) {
-        const { css, sourceMap } = await sassCompiler.compileStringAsync(code, {
-          url: url.pathToFileURL(path),
-          syntax: 'scss',
-          sourceMap: sourcemap,
-          importer: {
-            canonicalize: (url) => new URL(url),
-            async load(canonicalUrl) {
-              const resolvedPath = await resolve(url.fileURLToPath(canonicalUrl));
-              if (resolvedPath) {
-                return {
-                  contents: fs.readFileSync(resolvedPath).toString(),
-                  syntax: getSassSyntax(resolvedPath),
-                };
-              }
-              return null;
-            },
-          },
-        });
+        try {
+          const { css, sourceMap, loadedUrls } = await sassCompiler.compileStringAsync(code, {
+            url: url.pathToFileURL(filePath),
+            syntax: 'scss',
+            sourceMap: sourcemap,
+            importer: {
+              canonicalize: (url) => new URL(url),
+              async load(importedUrl) {
+                const importedPath = url.fileURLToPath(importedUrl);
+                const resolvedPath = await resolvePaths(resolve, importedPath);
 
-        return { css, map: (sourceMap as ExistingRawSourceMap | undefined) || null };
+                if (resolvedPath) {
+                  return {
+                    contents: fs.readFileSync(resolvedPath).toString(),
+                    syntax: getSassSyntax(resolvedPath),
+                  };
+                }
+
+                throw new Error(`Couldn't resolve "${path.basename(importedPath)}". (SASS)`);
+              },
+            },
+          });
+
+          const watchFiles = loadedUrls
+            .map((loadedUrl) => {
+              const urlPath = url.fileURLToPath(loadedUrl);
+              return path.isAbsolute(urlPath) && urlPath;
+            })
+            .filter(Boolean) as string[];
+
+          return { css, map: (sourceMap as ExistingRawSourceMap | undefined) || null, watchFiles };
+        } catch (error) {
+          throw new Error(`Couldn't compile "${filePath}". (${error})`);
+        }
       }
       throw new Error(
         'Please install the "sass" package to support ".scss" / ".sass" file compilation.'
@@ -77,35 +135,70 @@ export const preprocessors: CssProcessors = new Map<
   [
     /\.less$/,
     async (info) => {
-      const { code, sourcemap, path } = info;
-      const { default: lessCompiler } = (await import('less')) || {};
+      const { code, sourcemap, path: filePath, resolve } = info;
+      const { default: lessCompiler } = (await import('less').catch(() => null)) || {};
 
       if (lessCompiler) {
-        const { css, map } = await lessCompiler.render(code, {
-          filename: path,
-          sourceMap: {
-            outputSourceFiles: sourcemap,
-          },
-        });
+        try {
+          const { css, map, imports } = await lessCompiler.render(code, {
+            filename: filePath,
+            sourceMap: {
+              outputSourceFiles: sourcemap,
+            },
+            plugins: [
+              {
+                install({ FileManager }, pluginManager) {
+                  pluginManager.addFileManager(
+                    new (class extends FileManager {
+                      supports = () => true;
+                      async loadFile(fileName: string, fileDir: string) {
+                        const importedPath = path.resolve(fileDir, fileName);
+                        const resolvedPath = await resolvePaths(resolve, importedPath, fileDir);
 
-        return {
-          css,
-          map,
-        };
+                        if (resolvedPath) {
+                          return {
+                            filename: resolvedPath,
+                            contents: fs.readFileSync(resolvedPath).toString(),
+                          };
+                        }
+
+                        throw new Error(`Couldn't resolve "${fileName}". (LESS)`);
+                      }
+                    })()
+                  );
+                },
+              },
+            ],
+          });
+
+          const watchFiles = imports
+            .map((lessImport) => path.isAbsolute(lessImport) && lessImport)
+            .filter(Boolean) as string[];
+
+          return {
+            css,
+            map,
+            watchFiles,
+          };
+        } catch (error) {
+          throw new Error(`Couldn't compile "${filePath}". (${error})`);
+        }
       }
-      throw new Error(
-        'Please install the "sass" package to support ".scss" / ".sass" file compilation.'
-      );
+      throw new Error('Please install the "less" package to support ".less" file compilation.');
     },
   ],
   [
     /\.(styl|stylus)$/,
     async (info) => {
-      const { code, sourcemap, path } = info;
-      const { default: stylusCompiler } = (await import('stylus')) || {};
+      const { code, sourcemap, path: filePath } = info;
+      const { default: stylusCompiler } = (await import('stylus').catch(() => null)) || {};
 
       if (stylusCompiler) {
-        stylusCompiler.render(code, {});
+        stylusCompiler(code)
+          .define('url', stylusCompiler.resolver({}))
+          .render((error, css) => {
+            console.log(css);
+          });
       }
       return { css: '', map: null };
     },
@@ -124,13 +217,22 @@ export const runCssProcessors = async (
     code,
     sourcemap,
     path: id,
-    resolve: async (pathToResolve: string) => {
+    resolve: async (
+      pathToResolve: string,
+      importer: string | undefined,
+      context: ResolveContext
+    ) => {
       const defaultResult = getDefaultResolveResult(
-        await rollupPluginContext.resolve(pathToResolve)
+        await rollupPluginContext.resolve(pathToResolve, importer)
       );
       const result =
         typeof resolve === 'function'
-          ? await resolve(pathToResolve, false, defaultResult)
+          ? await resolve(
+              pathToResolve,
+              importer ? path.dirname(importer) : importer,
+              context,
+              defaultResult
+            )
           : defaultResult;
       if (result) {
         const { path, external } = result;

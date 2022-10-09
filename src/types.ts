@@ -196,7 +196,11 @@ export interface CssProcessorInfo {
   code: string;
   path: string;
   sourcemap: boolean;
-  resolve: (path: string) => Promise<string | null>;
+  resolve: (
+    path: string,
+    importer: string | undefined,
+    context: ResolveContext
+  ) => Promise<string | null>;
 }
 
 export type CssProcessors =
@@ -206,6 +210,8 @@ export type CssProcessors =
 export type CssProcessorResult = {
   css: string;
   map?: SourceMapInput | undefined;
+  watchFiles?: string[];
+  data?: Record<string, string>;
 };
 
 export type TransformResult = {
@@ -224,12 +230,16 @@ export type RollupCssResolve =
   /**
    * Customizes the resolution algorithm for all.
    * @param path The path to resolve.
+   * @param importer The importer of the path.
+   * NOTE: Sometimes the path ends with "<unknown>"" as the file name, in this case only the directory is known and not the full filename.
+   * This has been done so you still get the correct directory with the path.dirname function.
    * @param context The context of this resolution.
    * @param defaultResult The default result.
    * @return An object which describes the resolved result.
    */
   | ((
       path: string,
+      importer: string | undefined,
       context: ResolveContext,
       defaultResult: ResolveResult
     ) => Promise<ResolveResult> | ResolveResult)
@@ -244,10 +254,9 @@ export type RollupCssResolve =
 /**
  * The context of a resolution.
  * - "url": if the path to resolve is used in an "url()" token
- * - "@import": if the path to resolve is used in an "@import" rule
- * - "@use": if the path to resolve is used in an "@use" rule (only possible in sass)
+ * - "@import": if the path to resolve is used in an "@import" rule (includes "@use" and "@forward" rules from sass)
  */
-export type ResolveContext = 'url' | '@import' | '@use' | false;
+export type ResolveContext = 'url' | '@import';
 
 /**
  * Describes the result of a resolution.

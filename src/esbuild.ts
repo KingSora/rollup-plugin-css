@@ -138,7 +138,7 @@ export const runEsbuild = async (
                 );
                 const result =
                   typeof resolve === 'function'
-                    ? await resolve(pathToResolve, resolveContext, normalizedRollupResult)
+                    ? await resolve(pathToResolve, importer, resolveContext, normalizedRollupResult)
                     : normalizedRollupResult;
 
                 if (result) {

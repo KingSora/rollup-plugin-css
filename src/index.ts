@@ -3,7 +3,7 @@ import { createFilter } from '@rollup/pluginutils';
 import { pluginName } from './pluginName';
 import { normalizePathSlashes } from './normalizePathSlashes';
 import { runEsbuild } from './esbuild';
-import { runCssProcessors, preprocessors } from './cssProcessors';
+import { runCssProcessors, cssProcessors } from './cssProcessors';
 import { getOutputBasePath, emitAssetCssFiles, emitAssetFiles, emitChunkCssFiles } from './output';
 import { renderCssFiles } from './render';
 import type { Plugin, RenderedChunk } from 'rollup';
@@ -37,7 +37,7 @@ export const defaultOptions: RollupCssOptions = {
     url: null,
   },
   transform: {
-    cssProcessors: preprocessors,
+    cssProcessors: cssProcessors,
     result: {
       code: `export default undefined`,
       map: { mappings: '' },
