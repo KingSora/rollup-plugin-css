@@ -1,6 +1,6 @@
 import * as fs from 'fs';
-import * as path from 'path';
 import * as url from 'url';
+import * as path from 'path';
 import type { ExistingRawSourceMap, ResolvedId, TransformPluginContext } from 'rollup';
 import type { Syntax } from 'sass';
 import type {
@@ -12,6 +12,8 @@ import type {
   ResolveContext,
 } from './types';
 import { normalizePathSlashes } from './normalizePathSlashes';
+
+const unkownImporterFilePlaceholder = '<unknown>';
 
 const sassSyntaxMap: Record<Syntax, RegExp> = {
   scss: /\.scss$/,
@@ -56,7 +58,7 @@ const travelPath = (pathToTravel: string, backwards?: boolean) => {
 const resolvePaths = async (
   resolve: CssProcessorInfo['resolve'],
   importedPath: string,
-  importerDir?: string
+  importer?: string | undefined
 ) => {
   let resolvedPath: string | null = null;
   const importedPathExists = fs.existsSync(importedPath);
@@ -64,11 +66,14 @@ const resolvePaths = async (
     importedPath,
     ...(importedPathExists ? [] : travelPath(importedPath, true)),
   ];
-  const importer = importedPathExists
+  const resolvedImporter = importedPathExists
     ? importedPath
     : travelPath(importedPath).find((p) => fs.existsSync(p));
   const finalImporter =
-    importerDir || (importedPathExists || !importer ? importer : path.join(importer, '<unknown>'));
+    importer ||
+    (importedPathExists || !resolvedImporter
+      ? resolvedImporter
+      : path.join(resolvedImporter, unkownImporterFilePlaceholder));
 
   for (let i = 0; i < pathsToResolve.length; i++) {
     const resolved = await resolve(pathsToResolve[i], finalImporter, '@import');
@@ -110,17 +115,12 @@ export const cssProcessors: CssProcessors = new Map<
                   };
                 }
 
-                throw new Error(`Couldn't resolve "${path.basename(importedPath)}". (SASS)`);
+                throw new Error(`Couldn't resolve "${path.basename(importedPath)}".`);
               },
             },
           });
 
-          const watchFiles = loadedUrls
-            .map((loadedUrl) => {
-              const urlPath = url.fileURLToPath(loadedUrl);
-              return path.isAbsolute(urlPath) && urlPath;
-            })
-            .filter(Boolean) as string[];
+          const watchFiles = loadedUrls.map((loadedUrl) => url.fileURLToPath(loadedUrl));
 
           return { css, map: (sourceMap as ExistingRawSourceMap | undefined) || null, watchFiles };
         } catch (error) {
@@ -153,7 +153,11 @@ export const cssProcessors: CssProcessors = new Map<
                       supports = () => true;
                       async loadFile(fileName: string, fileDir: string) {
                         const importedPath = path.resolve(fileDir, fileName);
-                        const resolvedPath = await resolvePaths(resolve, importedPath, fileDir);
+                        const resolvedPath = await resolvePaths(
+                          resolve,
+                          importedPath,
+                          path.resolve(fileDir, unkownImporterFilePlaceholder)
+                        );
 
                         if (resolvedPath) {
                           return {
@@ -162,7 +166,7 @@ export const cssProcessors: CssProcessors = new Map<
                           };
                         }
 
-                        throw new Error(`Couldn't resolve "${fileName}". (LESS)`);
+                        throw new Error(`Couldn't resolve "${fileName}".`);
                       }
                     })()
                   );
@@ -171,14 +175,10 @@ export const cssProcessors: CssProcessors = new Map<
             ],
           });
 
-          const watchFiles = imports
-            .map((lessImport) => path.isAbsolute(lessImport) && lessImport)
-            .filter(Boolean) as string[];
-
           return {
             css,
             map,
-            watchFiles,
+            watchFiles: imports,
           };
         } catch (error) {
           throw new Error(`Couldn't compile "${filePath}". (${error})`);
@@ -194,13 +194,35 @@ export const cssProcessors: CssProcessors = new Map<
       const { default: stylusCompiler } = (await import('stylus').catch(() => null)) || {};
 
       if (stylusCompiler) {
-        stylusCompiler(code)
-          .define('url', stylusCompiler.resolver({}))
-          .render((error, css) => {
-            console.log(css);
+        try {
+          const sourcemapObj = sourcemap
+            ? {
+                sourcemap: {
+                  comment: false,
+                  inline: false,
+                },
+              }
+            : {};
+          const renderer = stylusCompiler(code, {
+            filename: filePath,
+            // @ts-ignore
+            ...sourcemapObj,
           });
+          const css = renderer.render();
+          const watchFiles = renderer.deps();
+          // @ts-ignore
+          const map = renderer.sourcemap as ExistingRawSourceMap | undefined;
+
+          return {
+            css,
+            map,
+            watchFiles,
+          };
+        } catch (error) {
+          throw new Error(`Couldn't compile "${filePath}". (${error})`);
+        }
       }
-      return { css: '', map: null };
+      throw new Error('Please install the "stylus" package to support ".styl" file compilation.');
     },
   ],
 ]);
