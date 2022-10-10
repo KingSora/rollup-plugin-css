@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import * as url from 'url';
+import { dirname, isAbsolute, resolve as pathResolve } from 'path';
 import esbuild from 'esbuild';
 import { normalizePathSlashes } from './normalizePathSlashes';
 import {
@@ -6,8 +8,13 @@ import {
   templateInterpolateSuffix,
   templateInterpolateSymbol,
 } from './render';
-import type { BuildOptions, StdinOptions, ImportKind } from 'esbuild';
-import type { ResolvedId, SourceMapInput, TransformPluginContext } from 'rollup';
+import type { BuildOptions, OutputFile, ImportKind } from 'esbuild';
+import type {
+  ExistingRawSourceMap,
+  ResolvedId,
+  SourceMapInput,
+  TransformPluginContext,
+} from 'rollup';
 import type {
   RollupCssAssets,
   RollupCssResolve,
@@ -97,23 +104,63 @@ const normalizeRollupResolveId = (
   return null;
 };
 
+const normalizeSourcemap = (
+  sourcemap: OutputFile | undefined
+): ExistingRawSourceMap | undefined => {
+  if (sourcemap) {
+    const { path, text } = sourcemap;
+    try {
+      const parsedMap = JSON.parse(text) as ExistingRawSourceMap;
+      return {
+        ...parsedMap,
+        sources: parsedMap.sources.map((sourcePath) => {
+          let diskPath = sourcePath;
+          try {
+            diskPath = url.fileURLToPath(sourcePath);
+          } catch {}
+
+          if (!isAbsolute(diskPath)) {
+            diskPath = pathResolve(dirname(path), diskPath);
+          }
+
+          return normalizePathSlashes(diskPath);
+        }),
+      };
+    } catch {}
+  }
+};
+
 export const runEsbuild = async (
+  inputFilePath: string,
+  inputCode: string,
+  inputSourcemap: string | undefined,
   userOptions: BuildOptions,
-  stdin: StdinOptions,
   forcedOptions: EsbuildUserForcedOptions,
   assetOptions: RollupCssAssets,
   resolve: RollupCssResolve,
   rollupPluginContext: TransformPluginContext
 ) => {
   const inputs: CssInputItem[] = [];
+  const watchFiles: string[] = [];
   const { sourcemap, minify } = forcedOptions;
   const { inline } = assetOptions;
+  const inlineSourcemap = inputSourcemap
+    ? `\r\n/*# sourceMappingURL=data:application/json;charset=utf-8;base64,${Buffer.from(
+        inputSourcemap
+      ).toString('base64')} */`
+    : '';
   const buildResult = await esbuild.build({
     ...userOptions,
     sourcemap: sourcemap ? 'external' : false,
-    outfile: stdin.sourcefile,
+    outdir: dirname(inputFilePath),
+    outbase: process.cwd(),
     minify,
-    stdin,
+    stdin: {
+      contents: `${inputCode}${inlineSourcemap}`,
+      sourcefile: inputFilePath,
+      resolveDir: dirname(inputFilePath),
+      loader: 'css',
+    },
     bundle: true,
     write: false,
     metafile: true,
@@ -169,7 +216,7 @@ export const runEsbuild = async (
                     )}`);
 
                     // watching for asset changes
-                    rollupPluginContext.addWatchFile(path);
+                    watchFiles.push(path);
 
                     return {
                       path: `${templateInterpolatePrefix}${templateInterpolateSymbol}${placeholder}${templateInterpolateSuffix}`,
@@ -235,14 +282,10 @@ export const runEsbuild = async (
     rollupPluginContext.error(`The esbuild generated css sourcemap wasn't found.`);
   }
 
-  let parsedMap: SourceMapInput = null;
-  try {
-    parsedMap = map?.text ? JSON.parse(map.text) : null;
-  } catch {}
-
   return {
     inputs,
     css: css.text,
-    map: parsedMap,
+    map: normalizeSourcemap(map),
+    watchFiles,
   };
 };

@@ -3,8 +3,11 @@ import type {
   SourceMapInput,
   TransformResult as RollupTransformResult,
   OutputChunk,
-  PluginContext,
+  ExistingRawSourceMap,
 } from 'rollup';
+import type { Options as SassOptions } from 'sass';
+import type { RenderOptions as StylusOptions } from 'stylus';
+import type PostcssModulesPlugin from 'postcss-modules';
 import type { FilterPattern } from '@rollup/pluginutils';
 
 type RollupTransformResultObj = Exclude<RollupTransformResult, string | null | void>;
@@ -20,6 +23,8 @@ export interface RollupCssOptions {
   output: RollupCssOutput;
   /** Options for the assets output behavior. */
   assets: RollupCssAssets;
+  /** Options for built-in and custom css processors. */
+  processors: RollupCssProcessors;
   /** Options for transformations. */
   transform: RollupCssTransform;
   /** Customizes the resolution algorithm for "url()" tokens and "@import" rules. */
@@ -89,7 +94,7 @@ export interface CssForChunksExtractDependency {
   /** The css code of this css dependency. */
   css: string;
   /** The sourcemap of this css dependency. */
-  map: SourceMapInput;
+  map?: ExistingRawSourceMap;
 }
 
 export type CssForChunksInject =
@@ -171,7 +176,7 @@ export interface AssetUrlInfo {
   publicPath: string | null;
 }
 
-/** Describes an asset file which was successfully outputted.  */
+/** Describes an asset file which was successfully outputted. */
 export interface AssetOutputMeta {
   /** The input path of the asset. */
   inputPath: string;
@@ -185,15 +190,44 @@ export interface AssetOutputMeta {
   };
 }
 
+export type RollupCssProcessors = {
+  /** Customize or disable the built-in sass pre processor. */
+  sass: CssProcessor<SassOptions<'async'>>;
+  /** Customize or disable the built-in less pre processor. */
+  less: CssProcessor<Record<string, any>>;
+  /** Customize or disable the built-in stylus pre processor. */
+  stylus: CssProcessor<StylusOptions>;
+  /** Customize or disable the built-in css-modules pre processor. */
+  cssModules: CssProcessor<Parameters<PostcssModulesPlugin>[0]>;
+  /** A custom css processor. */
+  custom: CssProcessorCustom;
+};
+
+export type CssProcessor<O extends Record<string, any>> =
+  /** Customize the RegExp and pass additional options. */
+  | [
+      /** Matching files are processed by the processor. */
+      test: RegExp,
+      /** Options which are passed to the processor. */
+      options: O
+    ]
+  /** Matching files are processed by the processor with the default options. */
+  | RegExp
+  /** This processor is disabled. */
+  | null;
+
 export type RollupCssTransform = {
-  /** Customizes css-processor to transform css code. */
-  cssProcessors: CssProcessors;
   /** Customizes the js transform. */
   result: Transform;
 };
 
+export type CssProcessorCustom =
+  | ((info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>)
+  | null;
+
 export interface CssProcessorInfo {
-  code: string;
+  css: string;
+  map?: string;
   path: string;
   sourcemap: boolean;
   resolve: (
@@ -203,13 +237,9 @@ export interface CssProcessorInfo {
   ) => Promise<string | null>;
 }
 
-export type CssProcessors =
-  | ((info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>)
-  | Map<RegExp, (info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>>;
-
 export type CssProcessorResult = {
   css: string;
-  map?: SourceMapInput | undefined;
+  map?: string;
   watchFiles?: string[];
   data?: Record<string, string>;
 };
@@ -223,7 +253,7 @@ export type TransformResult = {
 };
 
 export type Transform =
-  | ((info: CssProcessorResult) => TransformResult | Promise<TransformResult>)
+  | ((obj: any) => TransformResult | Promise<TransformResult>)
   | TransformResult;
 
 export type RollupCssResolve =
@@ -290,5 +320,5 @@ export interface PluginMeta {
   inputs: CssInputItem[];
   id: string;
   css: string;
-  map: SourceMapInput;
+  map?: ExistingRawSourceMap;
 }

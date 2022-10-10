@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "@rollup/pluginutils": "^4.2.1",
-    "dot": "^2.0.0-beta.1"
+    "dot": "^2.0.0-beta.1",
+    "source-map": "^0.7.4"
   }
 }

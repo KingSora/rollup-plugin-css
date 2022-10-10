@@ -1,8 +1,15 @@
 import * as fs from 'fs';
+import * as url from 'url';
 import * as path from 'path';
 import { normalizePathSlashes } from './normalizePathSlashes';
 import { pluginName } from './pluginName';
-import type { OutputBundle, OutputChunk, PluginContext, RenderedModule } from 'rollup';
+import type {
+  ExistingRawSourceMap,
+  OutputBundle,
+  OutputChunk,
+  PluginContext,
+  RenderedModule,
+} from 'rollup';
 import type {
   PluginMeta,
   RollupCssAssets,
@@ -121,6 +128,7 @@ const emitFile = (
   id: string,
   name: { name: string } | { fileName: string },
   source: string,
+  sourcemap: ExistingRawSourceMap | undefined | null,
   rollupPluginContext: PluginContext
 ): EmittedAssetFileMeta => {
   const emitId = rollupPluginContext.emitFile({
@@ -130,6 +138,28 @@ const emitFile = (
   });
   const emitFileName = rollupPluginContext.getFileName(emitId);
   const finalName = (name as { name: string }).name || (name as { fileName: string }).fileName;
+
+  if (sourcemap) {
+    rollupPluginContext.emitFile({
+      type: 'asset',
+      fileName: `${emitFileName}.map`,
+      source: JSON.stringify({
+        ...sourcemap,
+        sources: sourcemap.sources.map((sourcePath) => {
+          let diskPath = sourcePath;
+          try {
+            diskPath = url.fileURLToPath(sourcePath);
+          } catch {}
+
+          if (!path.isAbsolute(diskPath)) {
+            diskPath = path.resolve(process.cwd(), diskPath);
+          }
+
+          return normalizePathSlashes(diskPath);
+        }),
+      }),
+    });
+  }
 
   return {
     id,
@@ -154,7 +184,9 @@ export const emitAssetFiles = async (
         return name
           ? fs.promises
               .readFile(id)
-              .then((source) => emitFile(id, { name }, source.toString(), rollupPluginContext))
+              .then((source) =>
+                emitFile(id, { name }, source.toString(), null, rollupPluginContext)
+              )
           : null;
       })
       .filter(Boolean) as Promise<EmittedAssetFileMeta>[]
@@ -169,11 +201,11 @@ export const emitAssetCssFiles = (
   const pluginMetas = getPluginMetas(moduleIds, rollupPluginContext);
 
   return pluginMetas
-    .map(({ id, css, inputs }) => {
+    .map(({ id, css, map, inputs }) => {
       const name = getAssetName(outputBasePath, id, true, assetOptions);
       return name
         ? {
-            ...emitFile(id, { name }, css, rollupPluginContext),
+            ...emitFile(id, { name }, css, map, rollupPluginContext),
             substitutions: getSubstitutions(inputs),
           }
         : null;
@@ -242,7 +274,7 @@ export const emitChunkCssFiles = (
 
       return source.length
         ? {
-            ...emitFile(chunkFileName, { fileName }, source, rollupPluginContext),
+            ...emitFile(chunkFileName, { fileName }, source, null, rollupPluginContext),
             substitutions: getSubstitutions(usedInputs),
           }
         : null;

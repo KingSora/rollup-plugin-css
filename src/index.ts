@@ -1,9 +1,10 @@
 import * as path from 'path';
+import { SourceMapGenerator, SourceMapConsumer, RawSourceMap } from 'source-map';
 import { createFilter } from '@rollup/pluginutils';
 import { pluginName } from './pluginName';
 import { normalizePathSlashes } from './normalizePathSlashes';
 import { runEsbuild } from './esbuild';
-import { runCssProcessors, cssProcessors } from './cssProcessors';
+import { runCssProcessors } from './cssProcessors';
 import { getOutputBasePath, emitAssetCssFiles, emitAssetFiles, emitChunkCssFiles } from './output';
 import { renderCssFiles } from './render';
 import type { Plugin, RenderedChunk } from 'rollup';
@@ -13,6 +14,8 @@ import type {
   CssForChunks,
   CssForChunksExtract,
   CssForChunksInject,
+  RollupCssProcessors,
+  CssProcessor,
 } from './types';
 
 type DeepPartial<T> = {
@@ -36,8 +39,14 @@ export const defaultOptions: RollupCssOptions = {
     file: true,
     url: null,
   },
+  processors: {
+    sass: /\.(s[ac]ss)$/,
+    less: /\.less$/,
+    stylus: /\.(styl|stylus)$/,
+    cssModules: /\.module\.\S+$/,
+    custom: null,
+  },
   transform: {
-    cssProcessors: cssProcessors,
     result: {
       code: `export default undefined`,
       map: { mappings: '' },
@@ -79,15 +88,24 @@ export const RollupCss = ({
     file = defaultOptions.assets.file,
     url = defaultOptions.assets.url,
   } = {},
+  processors: {
+    sass = defaultOptions.processors.sass,
+    less = defaultOptions.processors.less,
+    stylus = defaultOptions.processors.stylus,
+    cssModules = defaultOptions.processors.cssModules,
+    custom: customProcessor = defaultOptions.processors.custom,
+  } = {},
   transform: {
-    cssProcessors: preprocessors = defaultOptions.transform.cssProcessors,
+    //cssProcessors: preprocessors = defaultOptions.transform.cssProcessors,
     result: transformResult = defaultOptions.transform.result,
   } = {},
   resolve = defaultOptions.resolve,
 }: DeepPartial<RollupCssOptions> = {}): Plugin => {
   const filter = createFilter(include, exclude);
   const assetOptions = { preserveDir, publicPath, inline, file, url };
+  const esbuildForcedOptions = { sourcemap, minify };
   const [extract, inject] = getCssForChunksOptions(cssForChunks);
+
   const importMap = new Map<string, string>();
 
   const plugin: Plugin = {
@@ -108,52 +126,60 @@ export const RollupCss = ({
       if (!filter(id)) {
         return;
       }
-      const normalizedId = normalizePathSlashes(id);
+      const filePath = normalizePathSlashes(id);
 
-      // 1. cssProcessors
-      const { css: cssProcessorCss, map: cssProcessorMap } = await runCssProcessors(
-        preprocessors,
+      // 1. cssProcessors (sass | less | stylus | cssModules | ...)
+      const {
+        css: cssProcessorCss,
+        map: cssProcessorMap,
+        watchFiles: cssProcessorWatchFiles,
+        data: cssProcessorData,
+      } = await runCssProcessors(
+        {
+          sass,
+          less,
+          stylus,
+          cssModules,
+        },
+        customProcessor,
         code,
         sourcemap,
-        normalizedId,
+        filePath,
         resolve,
         this
       );
 
-      // 2. postcss
-
-      // 3. css-modules
-
-      // 4. esbuild
-      const { css, map, inputs } = await runEsbuild(
+      // 2. esbuild (url() | @import | minify)
+      const { css, map, watchFiles, inputs } = await runEsbuild(
+        filePath,
+        cssProcessorCss,
+        cssProcessorMap,
         esbuildOptions,
-        {
-          contents: cssProcessorCss,
-          resolveDir: path.dirname(normalizedId),
-          sourcefile: path.basename(normalizedId),
-          loader: 'css',
-        },
-        {
-          sourcemap,
-          minify,
-        },
+        esbuildForcedOptions,
         assetOptions,
         resolve,
         this
       );
 
-      // 5. transformation
+      // 3. JS transformation
       const {
         code: transformedCode,
         map: transformedMap,
         meta,
         moduleSideEffects,
       } = typeof transformResult === 'function'
-        ? await transformResult({ css, map })
+        ? await transformResult({ css, map, cssProcessorData })
         : transformResult;
 
       //const token = `\0^<<^=${Buffer.from(id).toString('base64url')}^>>^`;
       //importMap.set(token, id);
+
+      // 4. watch files
+      [...(cssProcessorWatchFiles || []), ...(watchFiles || [])].forEach((watchFile) => {
+        if (path.isAbsolute(watchFile)) {
+          this.addWatchFile(watchFile);
+        }
+      });
 
       return {
         // code: `export { default } from ${JSON.stringify(token)}`,
@@ -162,7 +188,7 @@ export const RollupCss = ({
         meta: {
           [pluginName]: {
             ...(meta || {}),
-            id: normalizedId,
+            id: filePath,
             css,
             map,
             inputs,
