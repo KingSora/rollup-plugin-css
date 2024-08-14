@@ -1,5 +1,4 @@
 import * as path from 'path';
-import { SourceMapGenerator, SourceMapConsumer, RawSourceMap } from 'source-map';
 import { createFilter } from '@rollup/pluginutils';
 import { pluginName } from './pluginName';
 import { normalizePathSlashes } from './normalizePathSlashes';
@@ -14,8 +13,6 @@ import type {
   CssForChunks,
   CssForChunksExtract,
   CssForChunksInject,
-  RollupCssProcessors,
-  CssProcessor,
 } from './types';
 
 type DeepPartial<T> = {
@@ -122,7 +119,7 @@ export const RollupCss = ({
       }
     },
 
-    async transform(code, id) {
+    async transform(css, id) {
       if (!filter(id)) {
         return;
       }
@@ -130,11 +127,14 @@ export const RollupCss = ({
 
       // 1. cssProcessors (sass | less | stylus | cssModules | ...)
       const {
-        css: cssProcessorCss,
-        map: cssProcessorMap,
-        watchFiles: cssProcessorWatchFiles,
-        data: cssProcessorData,
+        css: cssProcessorsCss,
+        map: cssProcessorsMap,
+        watchFiles: cssProcessorsWatchFiles,
+        data: cssProcessorsData,
       } = await runCssProcessors(
+        filePath,
+        css,
+        sourcemap,
         {
           sass,
           less,
@@ -142,18 +142,20 @@ export const RollupCss = ({
           cssModules,
         },
         customProcessor,
-        code,
-        sourcemap,
-        filePath,
         resolve,
         this
       );
 
       // 2. esbuild (url() | @import | minify)
-      const { css, map, watchFiles, inputs } = await runEsbuild(
+      const {
+        css: esbuildCss,
+        map: esbuildMap,
+        watchFiles: esbuildWatchFiles,
+        inputs,
+      } = await runEsbuild(
         filePath,
-        cssProcessorCss,
-        cssProcessorMap,
+        cssProcessorsCss,
+        cssProcessorsMap,
         esbuildOptions,
         esbuildForcedOptions,
         assetOptions,
@@ -161,25 +163,25 @@ export const RollupCss = ({
         this
       );
 
-      // 3. JS transformation
+      // 3. watch files
+      [...cssProcessorsWatchFiles, ...esbuildWatchFiles].forEach((watchFile) => {
+        if (path.isAbsolute(watchFile)) {
+          this.addWatchFile(watchFile);
+        }
+      });
+
+      // 4. JS transformation
       const {
         code: transformedCode,
         map: transformedMap,
         meta,
         moduleSideEffects,
       } = typeof transformResult === 'function'
-        ? await transformResult({ css, map, cssProcessorData })
+        ? await transformResult({ esbuildCss, esbuildMap, cssProcessorData: cssProcessorsData })
         : transformResult;
 
       //const token = `\0^<<^=${Buffer.from(id).toString('base64url')}^>>^`;
       //importMap.set(token, id);
-
-      // 4. watch files
-      [...(cssProcessorWatchFiles || []), ...(watchFiles || [])].forEach((watchFile) => {
-        if (path.isAbsolute(watchFile)) {
-          this.addWatchFile(watchFile);
-        }
-      });
 
       return {
         // code: `export { default } from ${JSON.stringify(token)}`,
@@ -189,8 +191,8 @@ export const RollupCss = ({
           [pluginName]: {
             ...(meta || {}),
             id: filePath,
-            css,
-            map,
+            css: esbuildCss,
+            map: esbuildMap,
             inputs,
           } as PluginMeta,
         },

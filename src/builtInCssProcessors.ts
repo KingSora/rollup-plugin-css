@@ -3,10 +3,13 @@ import * as url from 'url';
 import * as path from 'path';
 import { normalizePathSlashes } from './normalizePathSlashes';
 import type { ExistingRawSourceMap } from 'rollup';
-import type { RenderOptions } from 'stylus';
-import type { Syntax, Options as SassOptions } from 'sass';
-import type PostcssModulesPlugin from 'postcss-modules';
-import type { CssProcessorInfo, CssProcessorResult } from './types';
+import type { Syntax } from 'sass';
+import type {
+  CssProcessor,
+  CssProcessorInfo,
+  CssProcessorResult,
+  RollupCssProcessors,
+} from './types';
 
 const unkownImporterFilePlaceholder = '<unknown>';
 
@@ -73,189 +76,206 @@ const resolvePaths = async (
   return resolvedPath;
 };
 
-export const sassProcessor = async (
-  info: CssProcessorInfo,
-  options: SassOptions<'async'>
-): Promise<CssProcessorResult> => {
-  const { css: code, sourcemap, path: filePath, resolve } = info;
-  const { default: sassCompiler } = (await import('sass').catch(() => null)) || {};
-
-  if (sassCompiler) {
-    try {
-      const {
-        css,
-        sourceMap: rawSourcemap,
-        loadedUrls,
-      } = await sassCompiler.compileStringAsync(code, {
-        ...options,
-        url: url.pathToFileURL(filePath),
-        syntax: 'scss',
-        sourceMap: sourcemap,
-        sourceMapIncludeSources: true,
-        importer: {
-          canonicalize: (url) => new URL(url),
-          async load(importedUrl) {
-            const importedPath = url.fileURLToPath(importedUrl);
-            const resolvedPath = await resolvePaths(resolve, importedPath);
-
-            if (resolvedPath) {
-              return {
-                contents: fs.readFileSync(resolvedPath).toString(),
-                syntax: getSassSyntax(resolvedPath),
-              };
-            }
-
-            throw new Error(`Couldn't resolve "${path.basename(importedPath)}".`);
-          },
-        },
-      });
-
-      const map = rawSourcemap ? JSON.stringify(rawSourcemap) : undefined;
-      const watchFiles = loadedUrls.map((loadedUrl) => url.fileURLToPath(loadedUrl));
-
-      return { css, map, watchFiles };
-    } catch (error) {
-      throw new Error(`Sass: Couldn't compile "${filePath}". (${error})`);
-    }
-  }
-  throw new Error(
-    'Please install the "sass" package to support ".scss" / ".sass" file compilation.'
-  );
+export type BuiltInProcessors = {
+  [N in keyof Omit<RollupCssProcessors, 'custom'>]: RollupCssProcessors[N] extends CssProcessor<
+    infer O
+  >
+    ? (info: CssProcessorInfo, options?: O) => CssProcessorResult | Promise<CssProcessorResult>
+    : never;
 };
 
-export const lessProcessor = async (
-  info: CssProcessorInfo,
-  options: Record<string, any>
-): Promise<CssProcessorResult> => {
-  const { css: code, sourcemap, path: filePath, resolve } = info;
-  const { default: lessCompiler } = (await import('less').catch(() => null)) || {};
+export const builtInProcessors: BuiltInProcessors = {
+  sass: async (info, options): Promise<CssProcessorResult> => {
+    const { css: code, sourcemap, path: filePath, resolve } = info;
+    const { default: sassCompiler } = (await import('sass').catch(() => null)) || {};
 
-  if (lessCompiler) {
-    try {
-      const { css, map, imports } = await lessCompiler.render(code, {
-        ...options,
-        filename: filePath,
-        sourceMap: {
-          outputSourceFiles: sourcemap,
-        },
-        plugins: [
-          {
-            install({ FileManager }, pluginManager) {
-              pluginManager.addFileManager(
-                new (class extends FileManager {
-                  supports = () => true;
-                  async loadFile(fileName: string, fileDir: string) {
-                    const importedPath = path.resolve(fileDir, fileName);
-                    const resolvedPath = await resolvePaths(
-                      resolve,
-                      importedPath,
-                      path.resolve(fileDir, unkownImporterFilePlaceholder)
-                    );
+    if (sassCompiler) {
+      try {
+        const {
+          css,
+          sourceMap: rawSourcemap,
+          loadedUrls,
+        } = await sassCompiler.compileStringAsync(code, {
+          ...(options || {}),
+          url: new URL(url.pathToFileURL(filePath).toString()),
+          syntax: 'scss',
+          sourceMap: sourcemap,
+          sourceMapIncludeSources: true,
+          importer: {
+            canonicalize: (url) => new URL(url),
+            async load(importedUrl) {
+              const importedPath = url.fileURLToPath(importedUrl);
+              const resolvedPath = await resolvePaths(resolve, importedPath);
 
-                    if (resolvedPath) {
-                      return {
-                        filename: resolvedPath,
-                        contents: fs.readFileSync(resolvedPath).toString(),
-                      };
+              if (resolvedPath) {
+                return {
+                  contents: fs.readFileSync(resolvedPath).toString(),
+                  syntax: getSassSyntax(resolvedPath),
+                };
+              }
+
+              throw new Error(`Couldn't resolve "${path.basename(importedPath)}".`);
+            },
+          },
+        });
+
+        const map = rawSourcemap ? JSON.stringify(rawSourcemap) : undefined;
+        const watchFiles = loadedUrls.map((loadedUrl) => url.fileURLToPath(loadedUrl));
+
+        return { css, map, watchFiles };
+      } catch (error) {
+        throw new Error(`Sass: Couldn't compile "${filePath}". (${error})`);
+      }
+    }
+    throw new Error(
+      'Please install the "sass" package to support ".scss" / ".sass" file compilation.'
+    );
+  },
+
+  less: async (info, options): Promise<CssProcessorResult> => {
+    const { css: code, sourcemap, path: filePath, resolve } = info;
+    const { default: lessCompiler } = (await import('less').catch(() => null)) || {};
+
+    if (lessCompiler) {
+      try {
+        const { css, map, imports } = await lessCompiler.render(code, {
+          ...(options || {}),
+          filename: filePath,
+          sourceMap: {
+            outputSourceFiles: sourcemap,
+          },
+          plugins: [
+            {
+              install({ FileManager }, pluginManager) {
+                pluginManager.addFileManager(
+                  new (class extends FileManager {
+                    supports = () => true;
+                    async loadFile(fileName: string, fileDir: string) {
+                      const importedPath = path.resolve(fileDir, fileName);
+                      const resolvedPath = await resolvePaths(
+                        resolve,
+                        importedPath,
+                        path.resolve(fileDir, unkownImporterFilePlaceholder)
+                      );
+
+                      if (resolvedPath) {
+                        return {
+                          filename: resolvedPath,
+                          contents: fs.readFileSync(resolvedPath).toString(),
+                        };
+                      }
+
+                      throw new Error(`Couldn't resolve "${fileName}".`);
                     }
-
-                    throw new Error(`Couldn't resolve "${fileName}".`);
-                  }
-                })()
-              );
+                  })()
+                );
+              },
             },
-          },
-        ],
-      });
+          ],
+        });
 
-      return {
-        css,
-        map,
-        watchFiles: imports,
-      };
-    } catch (error) {
-      throw new Error(`Less: Couldn't compile "${filePath}". (${error})`);
+        return {
+          css,
+          map,
+          watchFiles: imports,
+        };
+      } catch (error) {
+        throw new Error(`Less: Couldn't compile "${filePath}". (${error})`);
+      }
     }
-  }
-  throw new Error('Please install the "less" package to support ".less" file compilation.');
-};
+    throw new Error('Please install the "less" package to support ".less" file compilation.');
+  },
 
-export const stylusProcessor = async (
-  info: CssProcessorInfo,
-  options: RenderOptions
-): Promise<CssProcessorResult> => {
-  const { css: code, sourcemap, path: filePath } = info;
-  const { default: stylusCompiler } = (await import('stylus').catch(() => null)) || {};
+  stylus: async (info, options): Promise<CssProcessorResult> => {
+    const { css: code, sourcemap, path: filePath } = info;
+    const { default: stylusCompiler } = (await import('stylus').catch(() => null)) || {};
 
-  if (stylusCompiler) {
-    try {
-      const sourcemapObj = sourcemap
-        ? {
-            sourcemap: {
-              comment: false,
-              inline: false,
-            },
-          }
-        : {};
-      const renderer = stylusCompiler(code, {
-        ...options,
-        filename: filePath,
-        // @ts-ignore
-        ...sourcemapObj,
-      });
-      // @ts-ignore
-      const rawSourcemap = renderer.sourcemap as ExistingRawSourceMap | undefined;
-      const css = renderer.render();
-      const map = rawSourcemap ? JSON.stringify(rawSourcemap) : undefined;
-      const watchFiles = renderer.deps();
-
-      return {
-        css,
-        map,
-        watchFiles,
-      };
-    } catch (error) {
-      throw new Error(`Stylus: Couldn't compile "${filePath}". (${error})`);
-    }
-  }
-  throw new Error('Please install the "stylus" package to support ".styl" file compilation.');
-};
-
-export const cssModulesProcessor = async (
-  info: CssProcessorInfo,
-  options: Parameters<PostcssModulesPlugin>[0]
-): Promise<CssProcessorResult> => {
-  const { css: code, map: prevSourcemap, sourcemap, path: filePath } = info;
-  const { default: postcss } = (await import('postcss').catch(() => null)) || {};
-  const { default: postcssModules } = (await import('postcss-modules').catch(() => null)) || {};
-
-  if (postcss && postcssModules) {
-    try {
-      const { css, map: rawSourcemapObj } = await postcss([postcssModules(options)]).process(code, {
-        from: filePath,
-        map: sourcemap
+    if (stylusCompiler) {
+      try {
+        const sourcemapObj = sourcemap
           ? {
-              inline: false,
-              annotation: false,
-              absolute: true,
-              sourcesContent: true,
-              prev: prevSourcemap,
+              sourcemap: {
+                comment: false,
+                inline: false,
+              },
             }
-          : undefined,
-      });
+          : {};
+        const renderer = stylusCompiler(code, {
+          ...(options || {}),
+          filename: filePath,
+          // @ts-ignore
+          ...sourcemapObj,
+        });
+        // @ts-ignore
+        const rawSourcemap = renderer.sourcemap as ExistingRawSourceMap | undefined;
+        const css = renderer.render();
+        const map = rawSourcemap ? JSON.stringify(rawSourcemap) : undefined;
+        const watchFiles = renderer.deps();
 
-      const rawSourcemap = rawSourcemapObj.toJSON();
-      const map = rawSourcemap ? JSON.stringify(rawSourcemap) : undefined;
-
-      return {
-        css,
-        map,
-      };
-    } catch (error) {
-      throw new Error(`Css Modules: Couldn't compile "${filePath}". (${error})`);
+        return {
+          css,
+          map,
+          watchFiles,
+        };
+      } catch (error) {
+        throw new Error(`Stylus: Couldn't compile "${filePath}". (${error})`);
+      }
     }
-  }
-  throw new Error(
-    'Please install the "postcss" and "postcss-modules" package to support css modules compilation.'
-  );
+    throw new Error('Please install the "stylus" package to support ".styl" file compilation.');
+  },
+
+  cssModules: async (info, options): Promise<CssProcessorResult> => {
+    let cssModulesData: Record<string, string> = {};
+    const { css: code, map: prevSourcemap, sourcemap, path: filePath, resolve } = info;
+    const { default: postcss } = (await import('postcss').catch(() => null)) || {};
+    const { default: postcssModules } = (await import('postcss-modules').catch(() => null)) || {};
+
+    if (postcss && postcssModules) {
+      try {
+        const { css, map: rawSourcemapObj } = await postcss([
+          postcssModules({
+            scopeBehaviour: 'local',
+            generateScopedName: '[name]_[local]_[hash:base64:4]',
+            ...(options || {}),
+            getJSON: function (cssFileName, json, outputFileName) {
+              cssModulesData = json;
+              options?.getJSON?.(cssFileName, json, outputFileName);
+            },
+            async fileResolve(file, importer) {
+              return path.resolve(path.dirname(importer), file);
+            },
+          }),
+        ]).process(code, {
+          from: filePath,
+          to: filePath,
+          map: sourcemap
+            ? {
+                inline: false,
+                annotation: false,
+                absolute: true,
+                sourcesContent: true,
+                prev: prevSourcemap,
+              }
+            : undefined,
+        });
+
+        console.log({ rawSourcemapObj });
+
+        const rawSourcemap = rawSourcemapObj.toJSON();
+        console.log(rawSourcemap);
+        const map = rawSourcemap ? JSON.stringify(rawSourcemap) : undefined;
+
+        return {
+          css,
+          map,
+          data: cssModulesData ? { cssModules: cssModulesData } : undefined,
+        };
+      } catch (error) {
+        throw new Error(`Css Modules: Couldn't compile "${filePath}". (${error})`);
+      }
+    }
+    throw new Error(
+      'Please install the "postcss" and "postcss-modules" package to support css modules compilation.'
+    );
+  },
 };

@@ -1,11 +1,7 @@
 import * as path from 'path';
-import {
-  sassProcessor,
-  lessProcessor,
-  stylusProcessor,
-  cssModulesProcessor,
-} from './builtInCssProcessors';
+import { builtInProcessors } from './builtInCssProcessors';
 import type { ResolvedId, TransformPluginContext } from 'rollup';
+import type { BuiltInProcessors } from './builtInCssProcessors';
 import type {
   RollupCssProcessors,
   CssProcessorInfo,
@@ -13,19 +9,10 @@ import type {
   RollupCssResolve,
   ResolveResult,
   ResolveContext,
-  CssProcessor,
   CssProcessorCustom,
 } from './types';
 
-interface BuiltInProcessors {
-  sass: RollupCssProcessors['sass'];
-  less: RollupCssProcessors['less'];
-  stylus: RollupCssProcessors['stylus'];
-  cssModules: RollupCssProcessors['cssModules'];
-}
-
-const optionToTuple = <T extends Record<string, any>>(option: CssProcessor<T>) =>
-  Array.isArray(option) ? option : ([option, {} as T] as [regex: RegExp, options: T]);
+type BuiltInProcessorOptions = Omit<RollupCssProcessors, 'custom'>;
 
 const getDefaultResolveResult = (result: ResolvedId | null): ResolveResult => {
   if (result) {
@@ -38,30 +25,43 @@ const getDefaultResolveResult = (result: ResolvedId | null): ResolveResult => {
   return result;
 };
 
-const builtInprocessorsMap: Record<
-  keyof BuiltInProcessors,
-  (
-    info: CssProcessorInfo,
-    options: Record<string, any>
-  ) => CssProcessorResult | Promise<CssProcessorResult>
-> = {
-  sass: sassProcessor,
-  less: lessProcessor,
-  stylus: stylusProcessor,
-  cssModules: cssModulesProcessor,
+const runBuiltInProcessor = async <S extends keyof BuiltInProcessorOptions>(
+  filePath: string,
+  baseInfo: CssProcessorInfo,
+  latestResult: CssProcessorResult | null,
+  processor: BuiltInProcessors[S],
+  processorOption: BuiltInProcessorOptions[S]
+) => {
+  if (processorOption) {
+    const [regex, option] = Array.isArray(processorOption) ? processorOption : [processorOption];
+    if (regex.test(filePath)) {
+      return await processor({ ...baseInfo, map: latestResult?.map }, option);
+    }
+  }
 };
 
 export const runCssProcessors = async (
-  builtInProcessors: BuiltInProcessors,
-  customProcessor: CssProcessorCustom,
-  css: string,
-  sourcemap: boolean,
   filePath: string,
+  inputCss: string,
+  sourcemap: boolean,
+  builtInProcessorOptions: BuiltInProcessorOptions,
+  customProcessor: CssProcessorCustom,
   resolve: RollupCssResolve,
   rollupPluginContext: TransformPluginContext
-): Promise<CssProcessorResult> => {
+) => {
+  let latestResult: CssProcessorResult | null = null;
+  let data: Record<string, any> = {};
+  const watchFiles: string[] = [];
+  const collectResult = (result: CssProcessorResult | undefined) => {
+    if (result) {
+      data = { ...data, ...(result.data || {}) };
+      watchFiles.push(...(result.watchFiles || []));
+      return result;
+    }
+    return latestResult;
+  };
   const baseInfo: CssProcessorInfo = {
-    css,
+    css: inputCss,
     sourcemap,
     path: filePath,
     resolve: async (
@@ -88,29 +88,39 @@ export const runCssProcessors = async (
       return result;
     },
   };
-  let lastResult: CssProcessorResult | null = null;
 
-  for (const builtInProcessor of Object.entries(builtInProcessors) as [
-    keyof BuiltInProcessors,
-    CssProcessor<any>
-  ][]) {
-    const [name, processorOption] = builtInProcessor;
-    const processor = builtInprocessorsMap[name];
-    if (processorOption) {
-      const [regexp, options] = optionToTuple(processorOption);
+  for (let processorName of Object.keys(
+    builtInProcessorOptions
+  ) as (keyof BuiltInProcessorOptions)[]) {
+    latestResult = collectResult(
+      await runBuiltInProcessor(
+        filePath,
+        baseInfo,
+        latestResult,
+        builtInProcessors[processorName],
+        builtInProcessorOptions[processorName]
+      )
+    );
+  }
 
-      if (regexp.test(filePath)) {
-        lastResult = await processor(
-          { ...baseInfo, map: (lastResult as CssProcessorResult | null)?.map },
-          options
-        );
+  if (customProcessor) {
+    if (typeof customProcessor === 'function') {
+      latestResult = collectResult(await customProcessor({ ...baseInfo, map: latestResult?.map }));
+    } else {
+      for (let [regex, processor] of customProcessor.entries()) {
+        if (regex.test(filePath)) {
+          latestResult = collectResult(await processor({ ...baseInfo, map: latestResult?.map }));
+        }
       }
     }
   }
 
-  if (customProcessor) {
-    lastResult = await customProcessor({ ...baseInfo, map: lastResult?.map });
-  }
+  const { css, map } = latestResult || {};
 
-  return { ...lastResult, css: lastResult?.css || css };
+  return {
+    css: css || inputCss,
+    map,
+    data,
+    watchFiles,
+  };
 };

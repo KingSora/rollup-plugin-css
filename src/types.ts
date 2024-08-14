@@ -1,6 +1,5 @@
 import type { BuildOptions } from 'esbuild';
 import type {
-  SourceMapInput,
   TransformResult as RollupTransformResult,
   OutputChunk,
   ExistingRawSourceMap,
@@ -194,7 +193,7 @@ export type RollupCssProcessors = {
   /** Customize or disable the built-in sass pre processor. */
   sass: CssProcessor<SassOptions<'async'>>;
   /** Customize or disable the built-in less pre processor. */
-  less: CssProcessor<Record<string, any>>;
+  less: CssProcessor<Less.Options>;
   /** Customize or disable the built-in stylus pre processor. */
   stylus: CssProcessor<StylusOptions>;
   /** Customize or disable the built-in css-modules pre processor. */
@@ -223,6 +222,7 @@ export type RollupCssTransform = {
 
 export type CssProcessorCustom =
   | ((info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>)
+  | Map<RegExp, (info: CssProcessorInfo) => CssProcessorResult | Promise<CssProcessorResult>>
   | null;
 
 export interface CssProcessorInfo {
@@ -241,14 +241,13 @@ export type CssProcessorResult = {
   css: string;
   map?: string;
   watchFiles?: string[];
-  data?: Record<string, string>;
+  data?: Record<string, any>;
 };
 
-export type TransformResult = {
-  code?: RollupTransformResultObj['code'];
-  map?: RollupTransformResultObj['map'];
-  ast?: RollupTransformResultObj['ast'];
-  moduleSideEffects?: RollupTransformResultObj['moduleSideEffects'];
+export type TransformResult = Pick<
+  RollupTransformResultObj,
+  'code' | 'map' | 'ast' | 'moduleSideEffects'
+> & {
   meta?: Record<string, any>;
 };
 

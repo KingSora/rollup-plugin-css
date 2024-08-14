@@ -1,0 +1,4 @@
+.composes {
+  composes: compose from './compose.module.css';
+  content: 'composes entry';
+}
